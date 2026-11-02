@@ -17,9 +17,11 @@ then dress an illustrated model of yourself and save outfits to a lookbook.
 
 **Closet: browse.** Search across every attribute ("striped linen", "red work") and filter by type and color.
 
-**My Model.** An illustrated croquis (ink line art over a watercolor wash) in the style of a fashion sketch.
-Choose from 8 skin tones, 4 hair lengths (short, chin, shoulder, long), 4 textures (straight, wavy, curly,
-super curly) and 7 hair colors. The model doubles as your account avatar.
+**My Model.** A pen-and-ink croquis in the style of a fashion sketch: wobbly doubled ink lines, weighted accent
+strokes on the shadow side, and a loose wash for one of 8 skin tones. The model doubles as your account avatar.
+Models are currently drawn bald. Hair (4 lengths × 4 textures, with color shown through ink density) is built but
+switched off; set `SHOW_HAIR` in `src/components/Model.tsx` and `SHOW_HAIR_OPTIONS` in `src/pages/AvatarPage.tsx`
+to bring it back.
 
 **Dressing room.** Tap **+**, search or pick what to add (top, bottom, dress, jacket, shoes, hat, scarf, belt).
 Each choice puts ◀ ▶ arrows on that part of the body (hats on the head, scarves at the neck, tops and jackets

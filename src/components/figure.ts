@@ -167,6 +167,21 @@ function smoothClosed(pts: Pt[]): string {
 }
 const r1 = (v: number) => Math.round(v * 10) / 10;
 
+/** Smooth open curve through points (Catmull-Rom → cubic Bézier). */
+function smoothOpen(pts: Pt[]): string {
+  let d = `M ${p(pts[0].map(r1) as Pt)}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[Math.max(0, i - 1)];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[Math.min(pts.length - 1, i + 2)];
+    const c1: Pt = [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6];
+    const c2: Pt = [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6];
+    d += ` C ${p(c1.map(r1) as Pt)}, ${p(c2.map(r1) as Pt)}, ${p(p2.map(r1) as Pt)}`;
+  }
+  return d;
+}
+
 /** Dense points along the smooth closed curve, spaced roughly `step` apart. */
 function densify(pts: Pt[], step: number): Pt[] {
   const n = pts.length;
@@ -222,8 +237,12 @@ function waved(pts: Pt[], amp: number, wavelength: number): Pt[] {
 export interface HairShapes {
   back: string;
   front: string;
+  /** Just the hairline edge of `front`, for the pen line. */
+  hairline: string;
   /** Texture marks (strands or curl swirls), drawn inside the back hair. */
   marks: string[];
+  /** Strands over the crown (straight and wavy hair only). */
+  frontMarks: string[];
   markKind: "strand" | "curl";
 }
 
@@ -270,56 +289,81 @@ export function hairShapes(length: HairLength, texture: HairTexture): HairShapes
     r: [cx + fw - 3, cy + 12] as Pt,
   };
   const hairlineDip = texture === "coily" ? 0 : 6;
+  const hairline =
+    `M ${p(frontPts.r)} C ${cx + 27} ${cy - 10}, ${cx + 22} ${cy - 30 + hairlineDip}, ${cx - 8} ${cy - 30} ` +
+    `C ${cx - 20} ${cy - 26 + hairlineDip}, ${cx - 28} ${cy - 10}, ${p(frontPts.l)}`;
   const front =
     `M ${p(frontPts.l)} C ${cx - fw - 6} ${cy - 28}, ${cx - 20} ${crownTop}, ${cx + 2} ${crownTop} ` +
-    `C ${cx + 24} ${crownTop}, ${cx + fw + 6} ${cy - 28}, ${p(frontPts.r)} ` +
-    `C ${cx + 27} ${cy - 10}, ${cx + 22} ${cy - 30 + hairlineDip}, ${cx - 8} ${cy - 30} ` +
-    `C ${cx - 20} ${cy - 26 + hairlineDip}, ${cx - 28} ${cy - 10}, ${p(frontPts.l)} Z`;
+    `C ${cx + 24} ${crownTop}, ${cx + fw + 6} ${cy - 28}, ` +
+    hairline.slice(2) +
+    " Z";
 
-  // Texture marks.
+  // Texture marks: pen strands or curl loops. They are ordered so that any prefix is spread evenly across the hair,
+  // which lets darker hair simply draw more of them.
   const marks: string[] = [];
+  const frontMarks: string[] = [];
   let markKind: HairShapes["markKind"] = "strand";
+  const golden = (i: number) => (0.5 + i * 0.618034) % 1;
   if (texture === "straight" || texture === "wavy") {
-    const lines = longish ? 7 : 4;
-    for (let i = 0; i < lines; i++) {
-      const side = i % 2 ? 1 : -1;
-      const off = (8 + (i >> 1) * 9) * side;
-      const x0 = cx + off * 0.6;
-      const y0 = top + 14;
-      const x1 = cx + off * (longish ? 1.25 : 1.05);
-      const y1 = bottom - 10 - (i % 3) * 8;
+    const reach = longish ? wB * 0.95 : w0 * 0.92;
+    for (let i = 0; i < 30; i++) {
+      const t = golden(i) * 2 - 1; // -1 (left) … 1 (right)
+      // Start along the crown so the outer strands hug the sides of the head, where they're visible.
+      const x0 = cx - 6 + t * w0 * 0.8;
+      const y0 = top + 7 + t * t * (cy - top) * 0.55;
+      const x1 = cx + t * reach;
+      const y1 = bottom - 4 - golden(i * 7 + 3) * (longish ? 26 : 10);
+      const c1: Pt = [x0 + t * w0 * 0.55, y0 + (y1 - y0) * 0.12];
+      const c2: Pt = [x1 + t * 3, y1 - (y1 - y0) * 0.5];
       if (texture === "straight") {
-        marks.push(`M ${r1(x0)} ${r1(y0)} C ${r1(x0 + off * 0.4)} ${r1(y0 + 30)}, ${r1(x1)} ${r1(y1 - 60)}, ${r1(x1)} ${r1(y1)}`);
+        marks.push(`M ${r1(x0)} ${r1(y0)} C ${r1(c1[0])} ${r1(c1[1])}, ${r1(c2[0])} ${r1(c2[1])}, ${r1(x1)} ${r1(y1)}`);
       } else {
-        const segs = Math.max(2, Math.round((y1 - y0) / 40));
-        let d = `M ${r1(x0)} ${r1(y0)}`;
-        for (let k = 1; k <= segs; k++) {
-          const yy = y0 + ((y1 - y0) * k) / segs;
-          const xx = x0 + ((x1 - x0) * k) / segs;
-          d += ` S ${r1(xx + (k % 2 ? 7 : -7))} ${r1(yy - 14)}, ${r1(xx)} ${r1(yy)}`;
+        // Sample the curve and let it ripple sideways, more strongly lower down.
+        const pts: Pt[] = [];
+        const phase = golden(i * 3) * 0.6;
+        for (let k = 0; k <= 16; k++) {
+          const u = k / 16;
+          const v = 1 - u;
+          const x = v * v * v * x0 + 3 * v * v * u * c1[0] + 3 * v * u * u * c2[0] + u * u * u * x1;
+          const y = v * v * v * y0 + 3 * v * v * u * c1[1] + 3 * v * u * u * c2[1] + u * u * u * y1;
+          const ramp = Math.min(1, Math.max(0, (y - cy + 10) / 50));
+          pts.push([x + 5 * ramp * Math.sin((y / 46 + phase) * 2 * Math.PI), y]);
         }
-        marks.push(d);
+        marks.push(smoothOpen(pts));
       }
+    }
+    // Strands sweeping away from the side part, over the crown.
+    for (let i = 0; i < 16; i++) {
+      const t = golden(i + 11);
+      const side = i % 3 === 0 ? -1 : 1;
+      const ex = cx + side * (14 + t * 20);
+      const ey = cy - 22 + t * 34;
+      frontMarks.push(
+        `M ${r1(cx - 8)} ${r1(cy - 30)} Q ${r1(cx - 8 + side * (10 + t * 14))} ${r1(cy - 36 + t * 4)}, ${r1(ex)} ${r1(ey)}`,
+      );
     }
   } else {
     markKind = "curl";
-    const size = texture === "curly" ? 6 : 4;
-    // Deterministic scatter inside the silhouette.
+    const size = texture === "curly" ? 5.5 : 3.6;
     let seed = 7;
-    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
-    const tries = texture === "curly" ? 60 : 110;
+    const rand = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const tries = texture === "curly" ? 260 : 420;
     for (let i = 0; i < tries; i++) {
       const x = cx - wB - w0 + rand() * (wB + w0) * 2;
       const y = top + rand() * (bottom - top);
+      const s = size * (0.7 + rand() * 0.6);
+      const turn = rand() > 0.5 ? 1 : 0;
       if (!insidePolygon([x, y], outline)) continue;
-      // Skip the face area so curls show around it, not on it.
+      // Leave the face clear.
       if (((x - cx) / (HEAD.rx + 2)) ** 2 + ((y - cy - 6) / ry) ** 2 < 1 && y > cy - 26) continue;
-      const s = size * (0.75 + rand() * 0.5);
-      marks.push(`M ${r1(x - s)} ${r1(y)} a ${r1(s)} ${r1(s)} 0 1 1 ${r1(s)} ${r1(s)}`);
+      // A loose pen loop: most of a circle with a little tail.
+      marks.push(
+        `M ${r1(x - s)} ${r1(y + s * 0.3)} a ${r1(s)} ${r1(s * 0.9)} 0 1 ${turn} ${r1(s * 1.6)} ${r1(s * 0.5)}`,
+      );
     }
   }
 
-  return { back, front, marks, markKind };
+  return { back, front, hairline, marks, frontMarks, markKind };
 }
 
 function insidePolygon([x, y]: Pt, poly: Pt[]): boolean {
@@ -344,4 +388,20 @@ export function shade(hex: string, amount: number): string {
 }
 
 /** The body contour as an open line (no stroke across the top of the neck, which the head covers). */
-export const BODY_LINE = BODY_PATH.replace(/\s*Z$/, "");
+export const BODY_LINE = BODY_PATH.replace(/\s*Z$/, "")
+  // Start and end the neck just under the jaw so the line doesn't run up into the face.
+  .replace(/^M 163 104 C 163 118, /, "M 163 111 C 163 120, ")
+  .replace(/C 137 128, 137 118, 137 104$/, "C 137 128, 137 120, 137 111");
+
+/**
+ * Bold pen accents on the shadow side of the figure, the way illustrators weight a line where the form turns away
+ * from the light.
+ */
+export const ACCENT_LINES = [
+  "M 209 206 C 206 226, 203 238, 200 252 C 195 272, 186 286, 184 300", // right ribcage to waist
+  "M 206 380 C 207 400, 203 425, 199 455 C 195 490, 191 525, 189 560", // right outer thigh
+  "M 140 800 C 139.5 780, 137 745, 136 712", // left inner calf
+  "M 189 690 C 186 735, 178 772, 175 800", // right outer calf
+  "M 236 312 C 240 348, 244 386, 246 414", // right forearm
+  "M 176 98 C 172 106, 164 112, 154 114", // jaw, shadow side
+];

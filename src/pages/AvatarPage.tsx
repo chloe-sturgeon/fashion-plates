@@ -3,6 +3,9 @@ import { HAIR_COLORS, HAIR_LENGTHS, HAIR_TEXTURES, SKIN_TONES, type Avatar } fro
 import Model from "../components/Model.tsx";
 import { useAvatar } from "../lib/store.tsx";
 
+/** Models are drawn bald for now (see SHOW_HAIR in Model.tsx), so the hair choices are hidden too. */
+const SHOW_HAIR_OPTIONS = false;
+
 export default function AvatarPage() {
   const { avatar, loaded, save } = useAvatar();
   const [draft, setDraft] = useState<Avatar>(avatar);
@@ -48,6 +51,8 @@ export default function AvatarPage() {
           </div>
         </fieldset>
 
+        {SHOW_HAIR_OPTIONS && (
+          <>
         <fieldset className="field">
           <legend>Hair length</legend>
           <div className="seg">
@@ -86,6 +91,8 @@ export default function AvatarPage() {
             ))}
           </div>
         </fieldset>
+          </>
+        )}
 
         <div className="row">
           <button

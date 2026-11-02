@@ -1622,3 +1622,16 @@ button.swatch.on {
     display: none;
   }
 }
+
+/* The model is ink on paper, so its surfaces stay paper-light even in dark mode. */
+.stage,
+.look-figure,
+.avatar-preview,
+.topbar a.me,
+.mini-model,
+.look-detail-figure {
+  background: #fffefb;
+}
+.mini-model {
+  padding: 8px;
+}

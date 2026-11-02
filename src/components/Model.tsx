@@ -1,6 +1,7 @@
 import { useId, useMemo, useRef } from "react";
-import { HAIR_COLORS, SKIN_TONES, type Avatar, type ClosetItem } from "../../shared/types.ts";
+import { SKIN_TONES, type Avatar, type ClosetItem, type HairColor } from "../../shared/types.ts";
 import {
+  ACCENT_LINES,
   ARM_LINES,
   ARM_PATHS,
   BODY_LINE,
@@ -41,8 +42,28 @@ interface Props {
   headshot?: boolean;
 }
 
-const INK = "#2f2724";
-/** Watercolour is painted a touch off the ink line, the way illustrators work. */
+const INK = "#1f1a18";
+const PAPER = "#fffefb";
+/**
+ * Hair is switched off for now: every model is drawn bald, like a blank croquis. The hair generator, the avatar's
+ * hair settings and this rendering are all kept, so turning this back on restores them.
+ */
+const SHOW_HAIR = false;
+const HEAD_OUTLINE = "M 150 32 C 168 32, 180 46, 180 67 C 180 93, 166 114, 150 114 C 134 114, 120 93, 120 67 C 120 46, 132 32, 150 32 Z";
+/**
+ * Hair is drawn in ink only. Its colour reads the way it does in a pen sketch: through how many strands are drawn
+ * and how much hatching darkens it (0 = palest blonde, 1 = black).
+ */
+const HAIR_INK: Record<HairColor, number> = {
+  blonde: 0.12,
+  "strawberry-blonde": 0.28,
+  "dirty-blonde": 0.34,
+  red: 0.42,
+  "light-brown": 0.52,
+  "dark-brown": 0.78,
+  black: 1,
+};
+/** The skin wash is painted a touch off the ink line, the way illustrators work. */
 const WASH_OFFSET = "translate(2.2 1.6)";
 /** Broken pen strokes: long marks with small lifts of the pen. */
 const PEN_BREAKS = "260 2.5 120 1.5 340 3";
@@ -57,13 +78,15 @@ export default function Model({ avatar, layers = [], selectedId, onSelect, onMov
   const f = (name: string) => `url(#${name}${uid})`;
 
   const skin = SKIN_TONES.find((s) => s.id === avatar.skinTone)?.hex ?? SKIN_TONES[2].hex;
-  const hair = HAIR_COLORS.find((h) => h.id === avatar.hairColor)?.hex ?? HAIR_COLORS[5].hex;
+  const ink = HAIR_INK[avatar.hairColor] ?? 0.5;
   const hairGeo = useMemo(() => hairShapes(avatar.hairLength, avatar.hairTexture), [avatar.hairLength, avatar.hairTexture]);
   const skinEdge = shade(skin, -0.28);
   const feature = shade(skin, -0.62); // facial strokes are a deeper tone of the skin, not black ink
-  const hairDark = shade(hair, -0.45);
-  const hairLight = shade(hair, 0.35);
   const curly = hairGeo.markKind === "curl";
+  const markCount = Math.round(hairGeo.marks.length * (curly ? 0.35 + 0.65 * ink : 0.3 + 0.7 * ink));
+  const hairMarks = hairGeo.marks.slice(0, markCount);
+  const frontMarks = hairGeo.frontMarks.slice(0, Math.round(hairGeo.frontMarks.length * (0.4 + 0.6 * ink)));
+  const hatch = ink < 0.3 ? 0 : (ink - 0.2) * 0.75; // hatching opacity
   const interactive = Boolean(onSelect);
 
   const startDrag = (e: React.PointerEvent, layer: WornLayer) => {
@@ -101,11 +124,14 @@ export default function Model({ avatar, layers = [], selectedId, onSelect, onMov
       onPointerDown={interactive ? () => onSelect?.(null) : undefined}
     >
       <defs>
-        {/* Watercolour: wobbly, slightly soft edges. */}
+        {/* Watercolour: wobbly edges, and patchy coverage like a quick wash of colour. */}
         <filter id={`wash${uid}`} x="-10%" y="-5%" width="120%" height="110%">
           <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="3" seed="4" result="n" />
-          <feDisplacementMap in="SourceGraphic" in2="n" scale="6" xChannelSelector="R" yChannelSelector="G" result="d" />
-          <feGaussianBlur in="d" stdDeviation="0.5" />
+          <feDisplacementMap in="SourceGraphic" in2="n" scale="7" xChannelSelector="R" yChannelSelector="G" result="d" />
+          <feTurbulence type="fractalNoise" baseFrequency="0.018 0.006" numOctaves="2" seed="11" result="blot" />
+          <feColorMatrix in="blot" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1.8 0.1" result="mask" />
+          <feComposite in="d" in2="mask" operator="in" result="patchy" />
+          <feGaussianBlur in="patchy" stdDeviation="0.7" />
         </filter>
         {/* Pigment pooling at the edge of a wash. */}
         <filter id={`pool${uid}`} x="-10%" y="-5%" width="120%" height="110%">
@@ -118,6 +144,20 @@ export default function Model({ avatar, layers = [], selectedId, onSelect, onMov
           <feTurbulence type="fractalNoise" baseFrequency="0.7" numOctaves="1" seed="9" result="n" />
           <feDisplacementMap in="SourceGraphic" in2="n" scale="1.6" xChannelSelector="R" yChannelSelector="G" />
         </filter>
+        {/* A second, looser pass of the pen. */}
+        <filter id={`ink2${uid}`} x="-5%" y="-5%" width="110%" height="110%">
+          <feTurbulence type="fractalNoise" baseFrequency="0.06" numOctaves="2" seed="3" result="n" />
+          <feDisplacementMap in="SourceGraphic" in2="n" scale="3.5" xChannelSelector="R" yChannelSelector="G" />
+        </filter>
+        <pattern id={`hatch${uid}`} width="3.2" height="3.2" patternUnits="userSpaceOnUse" patternTransform="rotate(28)">
+          <line x1="0" y1="0" x2="0" y2="3.2" stroke={INK} strokeWidth="0.7" />
+        </pattern>
+        <clipPath id={`hairclip${uid}`}>
+          <path d={hairGeo.back} />
+        </clipPath>
+        <clipPath id={`frontclip${uid}`}>
+          <path d={hairGeo.front} />
+        </clipPath>
         <filter id={`soft${uid}`} x="-20%" y="-20%" width="140%" height="140%">
           <feGaussianBlur stdDeviation="0.35" />
         </filter>
@@ -143,28 +183,44 @@ export default function Model({ avatar, layers = [], selectedId, onSelect, onMov
       {/* Soft ground shadow */}
       {!headshot && <ellipse cx={152} cy={866} rx={52} ry={6} fill={INK} opacity={0.06} filter={f("pool")} />}
 
-      {/* ---- back hair ---- */}
-      <g transform={WASH_OFFSET}>
-        <path d={hairGeo.back} fill={hair} opacity={0.9} filter={f("wash")} />
-        <path d={hairGeo.back} fill="none" stroke={hairDark} strokeWidth={3} opacity={0.35} filter={f("pool")} />
+      {SHOW_HAIR && (
+        <>
+      {/* ---- back hair: ink only ---- */}
+      <path d={hairGeo.back} fill={PAPER} />
+      {hatch > 0 && <path d={hairGeo.back} fill={`url(#hatch${uid})`} opacity={hatch} filter={f("ink")} />}
+      <g fill="none" stroke={INK} strokeLinecap="round" clipPath={`url(#hairclip${uid})`}>
+        <g filter={f("ink2")}>
+          {hairMarks.map((d, i) => (
+            <path key={i} d={d} strokeWidth={curly ? 0.8 : i % 4 ? 0.55 : 0.9} opacity={(curly ? 0.55 : 0.45) + 0.4 * ink} />
+          ))}
+        </g>
       </g>
-      <g fill="none" strokeLinecap="round" filter={f("ink")}>
-        <path d={hairGeo.back} stroke={hairDark} strokeWidth={0.9} strokeDasharray={curly ? undefined : PEN_BREAKS} opacity={0.85} />
-        {hairGeo.marks.map((d, i) => (
-          <path key={i} d={d} stroke={i % 3 ? hairDark : hairLight} strokeWidth={curly ? 0.9 : 0.8} opacity={curly ? 0.7 : 0.6} />
+      <g fill="none" stroke={INK} strokeLinecap="round" strokeLinejoin="round">
+        <path d={hairGeo.back} strokeWidth={1} strokeDasharray={curly ? undefined : PEN_BREAKS} filter={f("ink")} />
+        <path d={hairGeo.back} strokeWidth={0.5} opacity={0.4} filter={f("ink2")} transform="translate(0.8 -0.6)" />
+      </g>
+        </>
+      )}
+
+      {/* ---- paper underlay: the figure is opaque even though its wash is not ---- */}
+      <g fill={PAPER}>
+        {ARM_PATHS.map((d) => (
+          <path key={d} d={d} />
         ))}
+        <path d={BODY_PATH} />
+        <ellipse cx={HEAD.cx} cy={HEAD.cy} rx={HEAD.rx} ry={HEAD.ry} />
       </g>
 
       {/* ---- skin wash (one layer, so overlaps don't darken) ---- */}
       <g transform={WASH_OFFSET}>
-        <g opacity={0.88} filter={f("wash")} fill={skin}>
+        <g opacity={0.8} filter={f("wash")} fill={skin}>
           {ARM_PATHS.map((d) => (
             <path key={d} d={d} />
           ))}
           <path d={BODY_PATH} />
           <ellipse cx={HEAD.cx} cy={HEAD.cy} rx={HEAD.rx} ry={HEAD.ry} />
         </g>
-        <g fill="none" stroke={skinEdge} strokeWidth={2.4} opacity={0.3} filter={f("pool")}>
+        <g fill="none" stroke={skinEdge} strokeWidth={2} opacity={0.14} filter={f("pool")}>
           <path d={BODY_PATH} />
           {ARM_PATHS.map((d) => (
             <path key={d} d={d} />
@@ -173,11 +229,11 @@ export default function Model({ avatar, layers = [], selectedId, onSelect, onMov
       </g>
 
       {/* ---- croquis bodysuit ---- */}
-      <path d={LEOTARD} fill="#f8f5f0" opacity={0.93} filter={f("wash")} transform={WASH_OFFSET} />
+      <path d={LEOTARD} fill={PAPER} />
 
       {/* ---- ink line art ---- */}
       <g fill="none" stroke={INK} strokeLinecap="round" strokeLinejoin="round" filter={f("ink")}>
-        <path d={BODY_LINE} strokeWidth={1} strokeDasharray={PEN_BREAKS} />
+        <path d={BODY_LINE} strokeWidth={1.1} strokeDasharray={PEN_BREAKS} />
         {ARM_LINES.map((d) => (
           <path key={d} d={d} strokeWidth={0.95} strokeDasharray={PEN_BREAKS} />
         ))}
@@ -187,8 +243,27 @@ export default function Model({ avatar, layers = [], selectedId, onSelect, onMov
             <path key={d} d={d} />
           ))}
         </g>
-        {/* jaw and cheek: open at the top where the hair covers the head */}
-        <path d="M 121 64 C 119 92, 133 114, 150 114 C 167 114, 181 92, 179 64" strokeWidth={0.85} opacity={0.85} />
+        {SHOW_HAIR ? (
+          /* jaw and cheek: open at the top where the hair covers the head */
+          <path d="M 121 64 C 119 92, 133 114, 150 114 C 167 114, 181 92, 179 64" strokeWidth={0.85} opacity={0.85} />
+        ) : (
+          /* the whole head, egg-shaped like a croquis */
+          <path d={HEAD_OUTLINE} strokeWidth={0.95} strokeDasharray="150 3 90 2" />
+        )}
+      </g>
+      {/* a looser second pass of the pen, slightly off the first */}
+      <g fill="none" stroke={INK} strokeLinecap="round" strokeLinejoin="round" filter={f("ink2")} opacity={0.38} transform="translate(0.9 -0.7)">
+        {!SHOW_HAIR && <path d={HEAD_OUTLINE} strokeWidth={0.5} strokeDasharray="60 10 120 8" />}
+        <path d={BODY_LINE} strokeWidth={0.55} strokeDasharray="70 9 160 6 40 12" />
+        {ARM_LINES.map((d) => (
+          <path key={d} d={d} strokeWidth={0.5} strokeDasharray="90 8 50 14" />
+        ))}
+      </g>
+      {/* weighted accents on the shadow side */}
+      <g fill="none" stroke={INK} strokeLinecap="round" filter={f("ink2")} opacity={0.85}>
+        {ACCENT_LINES.map((d) => (
+          <path key={d} d={d} strokeWidth={2.1} />
+        ))}
       </g>
 
       {/* ---- face: barely-there, suggested features ---- */}
@@ -206,18 +281,33 @@ export default function Model({ avatar, layers = [], selectedId, onSelect, onMov
       </g>
       <path d="M 145 98.5 Q 150 96.5 155 98.5 Q 150 101.5 145 98.5 Z" fill="#b0525d" opacity={0.42} filter={f("soft")} />
 
+      {SHOW_HAIR && (
+        <>
       {/* ---- hair framing the face ---- */}
-      <path d={hairGeo.front} fill={hair} opacity={0.95} filter={f("wash")} transform={WASH_OFFSET} />
-      {!curly && (
-        <path
-          d={hairGeo.front}
-          fill="none"
-          stroke={hairDark}
-          strokeWidth={0.85}
-          strokeDasharray={PEN_BREAKS}
-          opacity={0.8}
-          filter={f("ink")}
-        />
+      <path d={hairGeo.front} fill={PAPER} />
+      {hatch > 0 && <path d={hairGeo.front} fill={`url(#hatch${uid})`} opacity={hatch} filter={f("ink")} />}
+      <g fill="none" stroke={INK} strokeLinecap="round" filter={f("ink2")}>
+        {frontMarks.map((d, i) => (
+          <path key={i} d={d} strokeWidth={i % 3 ? 0.55 : 0.85} opacity={0.5 + 0.35 * ink} />
+        ))}
+        {curly && (
+          <g clipPath={`url(#frontclip${uid})`}>
+            {hairMarks.map((d, i) => (
+              <path key={i} d={d} strokeWidth={0.8} opacity={0.55 + 0.4 * ink} />
+            ))}
+          </g>
+        )}
+      </g>
+      <path
+        d={hairGeo.hairline}
+        fill="none"
+        stroke={INK}
+        strokeWidth={0.9}
+        strokeLinecap="round"
+        opacity={curly ? 0.55 : 0.85}
+        filter={f("ink")}
+      />
+        </>
       )}
 
       {/* ---- clothing ---- */}
